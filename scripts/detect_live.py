@@ -1,59 +1,62 @@
-import sounddevice as sd
 import numpy as np
 import librosa
+import sounddevice as sd
 from tensorflow.keras.models import load_model
 
-# Load the trained model
+# LOAD MODEL + CLASS NAMES
 MODEL_PATH = "models/sound_model.h5"
 model = load_model(MODEL_PATH)
 
-# Classes you trained the model on
-class_names = ["glass", "other"]
+# Load class names dynamically
+class_names = np.load("class_names.npy")
 
-def record_audio(duration=1, sr=22050):
-    audio = sd.rec(int(duration * sr), samplerate=sr, channels=1)
-    sd.wait()
-    return audio.flatten()
-
-def audio_to_melspectrogram(audio, sr=22050):
-    mel = librosa.feature.melspectrogram(y=audio, sr=sr)
+# AUDIO PREPROCESSING
+def preprocess_audio(audio, sr=22050):
+    # Mel spectrogram
+    mel = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=128)
     mel_db = librosa.power_to_db(mel, ref=np.max)
 
-    # Resize spectrogram to (128, 128)
-    mel_db = librosa.util.fix_length(mel_db, size=128, axis=0)
+    # Fix size (128x128)
     mel_db = librosa.util.fix_length(mel_db, size=128, axis=1)
 
-    # Normalize to 0–1
-    mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min())
+    # Normalize
+    mel_db = mel_db / 255.0
+
+    # Convert to 3 channels
+    mel_db = np.stack([mel_db, mel_db, mel_db], axis=-1)
+
+    # Add batch dimension
+    mel_db = np.expand_dims(mel_db, axis=0)
 
     return mel_db
 
+# LIVE MICROPHONE PREDICTION
 def predict_sound_live():
-    audio = record_audio()
+    sr = 22050
+    duration = 1  # 1 second recording
 
-    mel = audio_to_melspectrogram(audio)
+    recording = sd.rec(int(duration * sr), samplerate=sr, channels=1)
+    sd.wait()
 
-    # Convert to 3 channels (RGB like model expects)
-    mel = np.stack([mel, mel, mel], axis=-1)
-    mel = np.expand_dims(mel, axis=0)
+    audio = recording[:, 0]
 
-    preds = model.predict(mel)[0]
-    label = class_names[np.argmax(preds)]
-
-    return label, preds.tolist()
-
-# ------------------------------------------------------
-# NEW FUNCTION: Predict from uploaded audio file
-# ------------------------------------------------------
-def predict_from_file(file_path, sr=22050):
-    audio, _ = librosa.load(file_path, sr=sr)
-
-    mel = audio_to_melspectrogram(audio, sr)
-
-    mel = np.stack([mel, mel, mel], axis=-1)
-    mel = np.expand_dims(mel, axis=0)
+    mel = preprocess_audio(audio, sr)
 
     preds = model.predict(mel)[0]
+
     label = class_names[np.argmax(preds)]
 
-    return label, preds.tolist()
+    return label, preds
+
+
+# FILE PREDICTION
+def predict_from_file(path):
+    audio, sr = librosa.load(path, sr=22050)
+
+    mel = preprocess_audio(audio, sr)
+
+    preds = model.predict(mel)[0]
+
+    label = class_names[np.argmax(preds)]
+
+    return label, preds
